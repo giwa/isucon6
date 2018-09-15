@@ -5,7 +5,7 @@ Description = isucon6 qualifier sub application in Go
 WorkingDirectory=/home/isucon/isucon6q
 EnvironmentFile=/home/isucon/isucon6q/env.sh
 
-ExecStart = /home/isucon/webapp/isucon6q/isutar
+ExecStart = /home/isucon/isucon6q/isutar
 
 Restart   = always
 Type      = simple
