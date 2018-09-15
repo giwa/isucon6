@@ -6,6 +6,9 @@ echo 'Rotate log file...'
   "$DIR/rotate.sh"
 echo 'Rotated log file!'
 
+sudo cp "$DIR/isuda.go.service" /etc/systemd/system/
+sudo cp "$DIR/isutar.go.service" /etc/systemd/system/
+
 echo 'Update config file...'
   sudo cp "$DIR/nginx.conf" /etc/nginx/nginx.conf
   # sudo cp "$HOME/redis.conf" /etc/redis/redis.conf
