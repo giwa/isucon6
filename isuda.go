@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/Songmu/strrand"
+	"github.com/go-redis/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -28,16 +29,18 @@ import (
 const (
 	sessionName   = "isuda_session"
 	sessionSecret = "tonymoris"
+	redisKeyword  = "keyword"
 )
 
 var (
 	isutarEndpoint string
 	isupamEndpoint string
 
-	baseUrl *url.URL
-	db      *sql.DB
-	re      *render.Render
-	store   *sessions.CookieStore
+	baseUrl     *url.URL
+	db          *sql.DB
+	redisClient *redis.Client
+	re          *render.Render
+	store       *sessions.CookieStore
 
 	errInvalidUser = errors.New("Invalid User")
 )
@@ -163,13 +166,21 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SPAM!", http.StatusBadRequest)
 		return
 	}
-	_, err := db.Exec(`
+	res, err := db.Exec(`
 		INSERT INTO entry (author_id, keyword, description, created_at, updated_at)
 		VALUES (?, ?, ?, NOW(), NOW())
 		ON DUPLICATE KEY UPDATE
 		author_id = ?, keyword = ?, description = ?, updated_at = NOW()
 	`, userID, keyword, description, userID, keyword, description)
 	panicIf(err)
+
+	// Set to Redis using lastInsertID
+	lastInsertID, _ := res.LastInsertId()
+	err = redisClient.HSet(redisKeyword, string(lastInsertID), keyword).Err()
+	if err != nil {
+		fmt.Println("redis.Client.HSet Error:", err)
+	}
+
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -312,23 +323,34 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	if content == "" {
 		return ""
 	}
-	rows, err := db.Query(`
-		SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
-	`)
-	panicIf(err)
-	keywordStructs := make([]*Keyword, 0, 500)
-	for rows.Next() {
-		k := Keyword{}
-		err := rows.Scan(&k.Keyword)
-		panicIf(err)
-		keywordStructs = append(keywordStructs, &k)
+	hashes, err := redisClient.HGetAll(redisKeyword).Result() // val = map[string]string
+	if err != nil {
+		fmt.Println("redis.Client.HGetAll Error:", err)
 	}
-	rows.Close()
-
 	keywords := make([]string, 0, 500)
-	for _, keywordStruct := range keywordStructs {
-		keywords = append(keywords, regexp.QuoteMeta(keywordStruct.Keyword))
+	for _, kw := range hashes {
+		keywords = append(keywords, regexp.QuoteMeta(kw))
 	}
+	/*
+		rows, err := db.Query(`
+			SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+		`)
+		panicIf(err)
+		keywordStructs := make([]*Keyword, 0, 500)
+		for rows.Next() {
+			k := Keyword{}
+			err := rows.Scan(&k.Keyword)
+			panicIf(err)
+			keywordStructs = append(keywordStructs, &k)
+		}
+		rows.Close()
+
+		keywords := make([]string, 0, 500)
+		for _, keywordStruct := range keywordStructs {
+			keywords = append(keywords, regexp.QuoteMeta(keywordStruct.Keyword))
+		}
+	*/
+
 	re := regexp.MustCompile("(" + strings.Join(keywords, "|") + ")")
 	kw2sha := make(map[string]string)
 	content = re.ReplaceAllStringFunc(content, func(kw string) string {
@@ -425,6 +447,17 @@ func main() {
 	}
 	db.Exec("SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY'")
 	db.Exec("SET NAMES utf8mb4")
+
+	// Redis
+	redis_host := os.Getenv("REDIS_HOST")
+	if redis_host == "" {
+		redis_host = "localhost:6379"
+	}
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redis_host,
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
 
 	isutarEndpoint = os.Getenv("ISUTAR_ORIGIN")
 	if isutarEndpoint == "" {
